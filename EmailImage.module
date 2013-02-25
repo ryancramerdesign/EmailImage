@@ -1,0 +1,289 @@
+<?php
+
+/**
+ * Email Image Module
+ *
+ * Send photos from your mobile phone to ProcessWire, from anywhere, on-the-fly. 
+ * ProcessWire maintains a chronological gallery that you can simply email photos to.
+ * Works with any e-mail capable device, whether mobile phone, tablet or desktop. 
+ *
+ * Output inspired by the work of Philipp Reiner:
+ * http://panorama.philippreiner.de/
+ * http://processwire.com/talk/topic/2324-panorama-heidenheim-using-tumblr-on-ios-to-post-to-pw/
+ *
+ * Written for ProcessWire by Horst Nogajski and Ryan Cramer
+ * Copyright 2013
+ * License: GNU GPL v2 
+ * Requires: ProcessWire 2.2.13 or newer
+ *
+ */
+
+class EmailImage extends WireData implements Module, ConfigurableModule {
+
+	public static function getModuleInfo() {
+
+		return array(
+			'title' => 'Email Image', 
+			'version' => 2, 
+			'summary' => 'Send photos from your mobile phone to ProcessWire, from anywhere, on-the-fly.',
+			'author' => 'Horst Nogajski and Ryan Cramer',	
+			'singular' => true, 
+			'autoload' => true, 
+			'requires' => array('MarkupPagerNav')
+			);
+	}
+
+	/**
+	 * Default settings used by this module
+	 *
+	 */
+	static protected $defaultSettings = array(
+		'parent_page_id' => 0, 		// parent page ID where pages will be created
+		'parent_template_id' => 0,	// template ID used by parent page
+		'child_template_id' => 0,	// template ID used by child pages (1 image each)
+		'images_field_id' => 0,		// ID of email_image field
+		'wait_seconds' => 120, 		// how many seconds to wait between email checks
+		'last_time' => 0, 		// timestamp of when email was last checked (for runtime use)
+		'pop3_hostname' => '',		// POP3 hostname
+		'pop3_port' => 110,		// POP3 port
+		'pop3_tls' => false,		// POP3 tls?
+		'pop3_user' => '',		// POP3 user
+		'pop3_password' => '',		// POP3 password
+		'pop3_apop' => 0,		// use APOP authentication?
+		'pop3_body_password' => '',	// optional password somewhere in body
+		'pop3_body_txt_start' => '', 	// tag that precedes body text, i.e. [txt]
+		'pop3_body_txt_end' => '',	// tag that follows body text , i.e. [/txt]
+		'valid_senders' => '',		// email addresses of valid senders. String that we convert to array at runtime.
+		);
+
+	/**
+	 * Temporary directory where files are stored before placing on pages
+	 *
+	 */
+	const TMP_DIR_NAME = '.email-image-tmp';
+
+	/**
+	 * Name of activity/error log file
+	 *
+	 */
+	const LOG_FILENAME = 'email-image.txt';
+
+
+	/**
+	 * Populate default settings
+	 *
+	 */
+	public function __construct() {
+		foreach(self::$defaultSettings as $key => $value) $this->set($key, $value);
+	}
+
+	/**
+	 * Initialize the module and setup hooks
+	 *
+	 */
+	public function init() { }
+
+	/**
+	 * Determine if we should check for mail now
+	 *
+	 */
+	public function ready() {
+		$page = wire('page');
+		// return if elapsed seconds don't suggest checking mail right now
+		if(time() - $this->last_time < $this->wait_seconds) return; 
+
+		// determine whether we will check for mail before or after rendering page	
+		if($page->template->id == $this->parent_template_id || $page->template->name == 'email-images') {
+			// if email images template is being viewed, check for mail before rendering
+			$this->checkMail();
+		} else {
+			// for other templates, check mail after rendering
+			$this->addHook('ProcessPageView::finished', $this, 'checkMail'); 
+		}
+	}
+
+	/**
+	 * Make the renderEmailImages function available to templates
+	 *
+	 */
+	public function render($maxImages = 10, $maxWidth = 1200, $maxHeight = 900) {
+		include_once(dirname(__FILE__) . '/EmailImageRender.php'); 
+		return renderEmailImages($maxImages, $maxWidth, $maxHeight); 
+	}
+
+	/**
+	 * Bundle module settings back into an array for ImageEmailAdaptor
+	 *
+	 */
+	protected function getSettings() {
+
+		$settings = array();
+
+		foreach(self::$defaultSettings as $key => $value) {
+			$k = $key; 
+
+			// rename variables that start with pop3_
+			// we use pop3_ in our local version since names like 'user' would 
+			// collide with the ProcessWire API variable 'user'
+			if(strpos($key, 'pop3_') === 0) $k = substr($key, 5); 
+
+			if($key === 'valid_senders') {
+				// convert multi-line textarea value to array of emails
+				$emails = array();
+				foreach(explode("\n", $this->get('valid_senders')) as $email) $emails[] = trim($email);
+				$settings[$key] = $emails; 
+				continue; 
+			} 
+
+			$settings[$k] = $this->get($key);
+		}
+
+		return $settings;
+	}
+
+	/**
+	 * Return a ready-to-use copy of the ImageEmailAdaptor
+	 *
+	 */
+	public function getAdaptor() {
+		require_once(wire('config')->paths->ImageEmail . 'EmailImageAdaptor.php'); 
+		$a = new EmailImageAdaptor($this->getSettings()); 
+		return $a; 
+	}
+
+	/**
+	 * Return the temporary directory used by this module
+	 *
+	 */
+	public function getTmpDir() {
+
+		$dir = wire('config')->paths->cache . self::TMP_DIR_NAME . '/';
+
+		if(!is_dir($dir)) {
+			if(wireMkdir($dir)) $this->message("Created temporary dir: $dir"); 
+				else throw new WireException("Unable to create $dir"); 
+		}
+
+		if(!is_writable($dir)) throw new WireException("$dir is not writable"); 
+
+		return $dir; 
+	}
+
+	/**
+	 * Add a new page with image file
+	 *
+	 */
+	protected function addPage($title, $filename, $body) {
+
+		$parent = $this->pages->get($this->parent_page_id); 
+		$page = new Page();
+		$page->templates_id = $this->child_template_id;
+		$page->parent = $parent; 
+		$page->title = wire('sanitizer')->text($title); 
+		$basename = basename($filename);
+
+		$n = 0;
+		do {
+			$page->name = ($n ? "$n-" : '') . wire('sanitizer')->pageName($basename, true);
+			$test =	$parent->child("name=$page->name"); 	
+			$n++;
+		} while($test->id); 
+
+		try {
+			$page->save();
+			$field = wire('fields')->get($this->images_field_id); 
+			$page->get($field->name)->add($filename); 
+			if(strlen($body)) $page->get($field->name)->last()->description = wire('sanitizer')->textarea($body); 
+			$page->save();
+
+		} catch(WireException $e) {
+			$this->logError($e->getMessage()); 
+		}
+			
+		return $page; 
+	}
+
+	/**
+	 * Execute the LazyCron-triggered email check
+	 *
+	 */
+	public function checkMail() {
+		// exit out if not yet time to check mail
+		if(time() - $this->last_time < $this->wait_seconds) return; 
+
+		// record the time of the last check in our module config
+		$data = $this->modules->getModuleConfigData($this); 
+		$data['last_time'] = time();
+		$this->modules->saveModuleConfigData($this, $data); 
+
+		$path = $this->getTmpDir();
+		$a = $this->getAdaptor();
+
+		foreach($a->getImages(rtrim($path, '/')) as $info) {
+			$page = $this->addPage($info['subject'], $path . $info['filename'], $info['body']); 	
+			if($page->id) $this->logActivity("Added page: $page->path"); 
+			@unlink($path . $info['filename']); 
+		}
+
+		foreach($a->getErrors() as $error) {
+			$this->logError($error); 
+		}
+
+	}
+
+	/**
+	 * Save activity message to log file
+	 *
+	 */
+	protected function logActivity($message) {
+		$log = new FileLog(wire('config')->paths->logs . self::LOG_FILENAME); 
+		$log->save($message); 
+	}
+
+	/**
+	 * Save error message to log file
+	 *
+	 */
+	protected function logError($message) {
+		$this->error($message); 
+		$log = new FileLog(wire('config')->paths->logs . self::LOG_FILENAME); 
+		$log->save("ERROR: $message"); 
+	}
+
+	/**
+	 * Build a form allowing configuration of this Module
+	 *
+	 */
+	static public function getModuleConfigInputfields(array $data) {
+		$data = array_merge(self::$defaultSettings, $data); 
+		require_once(dirname(__FILE__) . '/EmailImageConfig.php'); 
+		$c = new EmailImageConfig();
+		return $c->getConfig($data);
+	}
+
+	/**
+	 * Return instance of the installer class
+	 *
+	 */
+	protected function getInstaller() {
+		require_once(dirname(__FILE__) . '/EmailImageInstall.php'); 
+		return new EmailImageInstall();
+	}
+
+	/**
+	 * Perform installation
+	 *
+	 */
+	public function ___install() {
+		$this->getInstaller()->install(self::$defaultSettings);
+	}
+
+	/**
+	 * Perform uninstall
+	 *
+	 */
+	public function ___uninstall() {
+		$this->getInstaller()->uninstall($this);
+	}
+}
+
