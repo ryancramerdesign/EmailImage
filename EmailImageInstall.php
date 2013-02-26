@@ -4,21 +4,34 @@ class EmailImageInstall extends Wire {
 
 	public function install(array $settings) {
 
-		$field = $this->fields->get('email_image');
+		$field = $this->fields->get('email_images');
 		if(!$field) {
 			$field = new Field();
-			$field->name = 'email_image';
+			$field->name = 'email_images';
 			$field->type = $this->modules->get('FieldtypeImage');
 			$field->label = 'Email Images';
 			$field->extensions = 'jpeg jpg gif png';
-			$field->maxFiles = 1; 
+			$field->maxFiles = 0; 
 			$field->unzip = 0;
-			$field->descriptionRows = 5;
+			$field->descriptionRows = 1;
 			$field->entityEncode = 1; 
 			$field->save();
 			$this->message("Created field: $field->name"); 
 		}
 		$settings['images_field_id'] = $field->id; 
+
+		$field2 = $this->fields->get('email_image_body');
+		if(!$field2) {
+			$field2 = new Field();
+			$field2->name = 'email_image_body';
+			$field2->type = $this->modules->get('FieldtypeTextarea');
+			$field2->label = 'Body Text';
+			$field2->textformatters = array('TextformatterEntities'); 
+			$field2->inputfieldClass = 'InputfieldTextarea'; 
+			$field2->rows = 5; 
+			$field2->save();
+			$this->message("Created field: $field2->name"); 
+		}
 
 		// parent fieldgroup
 		$parentFieldgroup = $this->fieldgroups->get('email-images');
@@ -50,7 +63,8 @@ class EmailImageInstall extends Wire {
 			$childFieldgroup->name = 'email-image';
 			$childFieldgroup->save();
 			$childFieldgroup->add('title');
-			$childFieldgroup->add($field); // email_image
+			$childFieldgroup->add($field); // email_images
+			$childFieldgroup->add($field2); // email_image_body
 			$childFieldgroup->save();
 			$this->message("Created fieldgroup: $childFieldgroup->name"); 
 		}
@@ -138,11 +152,19 @@ class EmailImageInstall extends Wire {
 			$field = $this->fields->get((int) $module->images_field_id); 
 			if($field) try {
 				$this->fields->delete($field); 
-				$this->message("Deleted email_image field"); 
+				$this->message("Deleted email_images field"); 
 			} catch(Exception $e) {
 				$this->error($e->getMessage());
 			}
 		}	
+
+		$field = wire('fields')->get('email_image_body'); 
+		if($field) try {
+			$this->fields->delete($field); 
+			$this->message("Deleted email_image_body field"); 
+		} catch(Exception $e) {
+			$this->error($e->getMessage());
+		}
 
 		try {
 			$dir = $module->getTmpDir();

@@ -38,22 +38,22 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 	 *
 	 */
 	static protected $defaultSettings = array(
-		'parent_page_id' => 0, 		// parent page ID where pages will be created
-		'parent_template_id' => 0,	// template ID used by parent page
-		'child_template_id' => 0,	// template ID used by child pages (1 image each)
-		'images_field_id' => 0,		// ID of email_image field
-		'wait_seconds' => 120, 		// how many seconds to wait between email checks
-		'last_time' => 0, 		// timestamp of when email was last checked (for runtime use)
-		'pop3_hostname' => '',		// POP3 hostname
-		'pop3_port' => 110,		// POP3 port
-		'pop3_tls' => false,		// POP3 tls?
-		'pop3_user' => '',		// POP3 user
-		'pop3_password' => '',		// POP3 password
-		'pop3_apop' => 0,		// use APOP authentication?
-		'pop3_body_password' => '',	// optional password somewhere in body
-		'pop3_body_txt_start' => '', 	// tag that precedes body text, i.e. [txt]
-		'pop3_body_txt_end' => '',	// tag that follows body text , i.e. [/txt]
-		'valid_senders' => '',		// email addresses of valid senders. String that we convert to array at runtime.
+		'parent_page_id' => 0, 			// parent page ID where pages will be created
+		'parent_template_id' => 0,		// template ID used by parent page
+		'child_template_id' => 0,		// template ID used by child pages (1 image each)
+		'images_field_id' => 0,			// ID of email_image field
+		'wait_seconds' => 120, 			// how many seconds to wait between email checks
+		'last_time' => 0, 			// timestamp of when email was last checked (for runtime use)
+		'pop3_hostname' => '',			// POP3 hostname
+		'pop3_port' => 110,			// POP3 port
+		'pop3_tls' => false,			// POP3 tls?
+		'pop3_user' => '',			// POP3 user
+		'pop3_password' => '',			// POP3 password
+		'pop3_apop' => 0,			// use APOP authentication?
+		'pop3_body_password' => '',		// optional password somewhere in body
+		'pop3_body_txt_start' => '[text]', 	// tag that precedes body text, i.e. [txt]
+		'pop3_body_txt_end' => '[/text]',	// tag that follows body text , i.e. [/txt]
+		'valid_senders' => '',			// email addresses of valid senders. String that we convert to array at runtime.
 		);
 
 	/**
@@ -89,6 +89,8 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 	 */
 	public function ready() {
 		$page = wire('page');
+		// don't perform pop3 checks in admin
+		if($page->template == 'admin') return;
 		// return if elapsed seconds don't suggest checking mail right now
 		if(time() - $this->last_time < $this->wait_seconds) return; 
 
@@ -173,18 +175,17 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 	 * Add a new page with image file
 	 *
 	 */
-	protected function addPage($title, $filename, $body) {
+	protected function addPage($title, array $filenames, $body) {
 
 		$parent = $this->pages->get($this->parent_page_id); 
 		$page = new Page();
 		$page->templates_id = $this->child_template_id;
 		$page->parent = $parent; 
 		$page->title = wire('sanitizer')->text($title); 
-		$basename = basename($filename);
 
 		$n = 0;
 		do {
-			$page->name = ($n ? "$n-" : '') . wire('sanitizer')->pageName($basename, true);
+			$page->name = ($n ? "$n-" : '') . wire('sanitizer')->pageName($title, true);
 			$test =	$parent->child("name=$page->name"); 	
 			$n++;
 		} while($test->id); 
@@ -192,8 +193,12 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 		try {
 			$page->save();
 			$field = wire('fields')->get($this->images_field_id); 
-			$page->get($field->name)->add($filename); 
-			if(strlen($body)) $page->get($field->name)->last()->description = wire('sanitizer')->textarea($body); 
+			foreach($filenames as $filename) {
+				$page->get($field->name)->add($filename); 
+			}
+			if(strlen($body)) {
+				$page->email_image_body = wire('sanitizer')->textarea($body); 
+			}
 			$page->save();
 
 		} catch(WireException $e) {
@@ -219,10 +224,18 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 		$path = $this->getTmpDir();
 		$a = $this->getAdaptor();
 
-		foreach($a->getImages(rtrim($path, '/')) as $info) {
-			$page = $this->addPage($info['subject'], $path . $info['filename'], $info['body']); 	
+		foreach(array_reverse($a->getImages(rtrim($path, '/'))) as $info) {
+			$filenames = $info['filename'];
+			// ensure it is an array of files
+			if(!is_array($filenames)) $filenames = array($filenames); 
+			// insert path into filenames
+			foreach($filenames as $k => $v) $filenames[$k] = $path . $v; 
+			// add the page
+			$page = $this->addPage($info['subject'], $filenames, $info['body']); 	
+			// log the activity
 			if($page->id) $this->logActivity("Added page: $page->path"); 
-			@unlink($path . $info['filename']); 
+			// remove the temporary files
+			foreach($filenames as $filename) @unlink($filename); 
 		}
 
 		foreach($a->getErrors() as $error) {

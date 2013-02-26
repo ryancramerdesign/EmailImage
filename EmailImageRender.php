@@ -37,20 +37,19 @@ function renderEmailImages($maxImages, $maxWidth, $maxHeight) {
 	foreach($children as $child) {
 
 		$date = date($dateFormat, $child->created); 
-		$image = $child->email_image; 
 
-		if($maxWidth && $image->width > $maxWidth) $image = $image->width($maxWidth); 
-		if($maxHeight && $image->height > $maxHeight) $image = $image->height($maxHeight); 
+		$out .= "\n<div class='email-image'>" . 
+			"<h2>$child->title</h2>" . 
+			"<p class='email-image-date'>$date</p>";
 
-		$out .= "
+		foreach($child->email_images as $image) {
+			if($maxWidth && $image->width > $maxWidth) $image = $image->width($maxWidth); 
+			if($maxHeight && $image->height > $maxHeight) $image = $image->height($maxHeight); 
+			$out .= "<p class='email-image-photo'><img src='$image->url' alt='$image->description' /></p>";
+			if($child->email_image_body) $out .= "<p class='email-image-body'>$child->email_image_body</p>";
+		}
 
-		<div class='email-image'>
-		<h2>$child->title</h2>
-		<p class='date'>$date</p>
-		<img src='$image->url' alt='$image->description' />
-		</div>
-
-		";
+		$out .= "</div>";
 	}
 
 	$pager = $children->renderPager(); // pagination nav, when applicable

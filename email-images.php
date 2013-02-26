@@ -40,10 +40,11 @@
 		// Prefer to generate your own markup? Here's a snippet to get you started: 
 		// 
 		// foreach($page->children as $child) {
-		// 	$image = $child->email_image; 
 		//	$date = date('Y/m/d g:i a', $child->created); 
 		//	echo "<div class='email-image'><h2>$child->title</h2><p>$date</p>";
-		//	echo "<img src='$image->url' alt='$image->description'></div>";
+		//	foreach($child->email_images as $img) echo "<p><img src='$img->url' alt=''></p>";
+		// 	if($child->email_image_body) echo "<p>$child->email_image_body</p>";
+		// 	echo "</div>";
 		// }
 
 		?>

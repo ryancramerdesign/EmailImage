@@ -52,6 +52,19 @@ customized to your needs. For example:
 
 Please post links to what you create in the [ProcessWire forums](http://processwire.com/talk/). 
 
+## How to Uninstall
+
+You can uninstall this module in the same way as any other module, by checking
+the box to "uninstall" from the module settings screen. But please note the 
+following warning:
+
+When you uninstall, your system is returned to the state that it was in before
+this module was installed. Meaning, the EmailImage pages and images will be 
+deleted. So please backup your images somewhere else if you want to lose them
+during uninstall. 
+
+After uninstalling, you can safely remove this dir: /site/modules/EmailImage/.
+
 --------------
 
 Copyright 2013
