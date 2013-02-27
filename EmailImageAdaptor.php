@@ -4,19 +4,23 @@
   *
   *  @php_version -   5.2.x
   * ---------------------------------------------------------------------------
-  *  @version     -   v1.0 RC1
-  *  @date        -   $Date: 2013/02/24 01:37:08 $
+  *  @version     -   v1.0 RC2
+  *  @date        -   $Date: 2013/02/26 22:18:01 $
   *  @author      -   Horst Nogajski <coding AT nogajski DOT de>
   *  @licence     -   GNU GPL v2 - http://www.gnu.org/licenses/gpl-2.0.html
   * ---------------------------------------------------------------------------
   *  $Source: /WEB/pw_pop3/EmailImageAdaptor.php,v $
-  *  $Id: EmailImageAdaptor.php,v 1.1.2.2 2013/02/24 01:37:08 horst Exp $
+  *  $Id: EmailImageAdaptor.php,v 1.1.2.4 2013/02/26 22:18:01 horst Exp $
   ******************************************************************************
   *
   *  LAST CHANGES:
   *
   *  2013-02-23    change  	RC1   no more using stream_wrapper for fetching messages, instead we use RetrieveMessage( $msg_id, $headers, $body, -1 ) now
   *                               - so we have only one single-connection to the server, maybe that can solve the issue with Ryans double fetching Mails ?
+  *
+  *  2013-02-26    change  	RC2   now we pull all images from Email, function getImages($path) now returns filename/s as array:
+  *                               - array('filenames' => array('file1.jpg','file2.jpg','file3.jpg'), 'subject' => 'another subject line', 'body' => 'optional some descriptive Text')
+  *                               - array('filenames' => array('file.jpg'), 'subject' => 'a subject line', 'body' => '')
   *
 **/
 
@@ -27,9 +31,6 @@ require_once( dirname(__FILE__) . '/pop3_classes/pop3.php' );
 //require_once( dirname(__FILE__) . '/pop3_classes/sasl.php' );
 
 
-//stream_wrapper_register('pop3', 'pop3_stream');  /* Register the pop3 stream handler class */
-
-
 
 class EmailImageAdaptor {
 
@@ -38,7 +39,6 @@ class EmailImageAdaptor {
 	public function __construct(array $config) {
 		// Set all settings related to the email account
 		$this->pw_pop3 = new hnpw_pop3($config);
-
 	}
 
 	public function __destruct() {
@@ -61,13 +61,10 @@ class EmailImageAdaptor {
 		// If fatal error occurred or nothing new, returns blank array.
 		// Proposed return array would be:
 		// array(
-		//   0 => array('filename' => 'file1.jpg', 'subject' => 'subject line text', 'body' => 'maybe some description to the image, but is optional'),
-		//   1 => array('filename' => 'file2.jpg', 'subject' => 'another subject line', 'body' => ''),
+		//   0 => array('filenames' => array('file1.jpg'), 'subject' => 'subject line text', 'body' => 'maybe some description to the image, but is optional'),
+		//   1 => array('filenames' => array('file1.jpg','file2.jpg','file3.jpg'), 'subject' => 'another subject line', 'body' => ''),
 		//   ...and more items as found...
 		//   );
-
-// Ryan:  have I to check for this?  ==>      is_dir($path)     assuming: no
-// Ryan:  has it a trailing slash or not ??                     assuming: no
 
 		if( ! $this->pw_pop3->connect() )
 		{
@@ -82,21 +79,13 @@ class EmailImageAdaptor {
 		{
 			@set_time_limit( 120 );
 
-			$aResult = $this->pw_pop3->process_next_msg();
-
-			if( ! is_array($aResult) || ! isset($aResult['imgdata']) || is_null($aResult['imgdata']) )
+			$aResult = $this->pw_pop3->process_next_msg($path);
+			if( ! is_array($aResult) )
 			{
 				continue;
 			}
-			// $aResult = array('subject', 'imgname', 'imgdata', 'imgextension')
-			$img_basename = is_string($aResult['imgname']) ? $aResult['imgname'] : 'imgfile_'. strval(count($aImageEmails)+1) .'.'. $aResult['imgextension'];
-			$img_filename = $path .'/'. $img_basename;
-			$this->next_free_imgname($img_filename);
-			$file_saved = file_put_contents( $img_filename, $aResult['imgdata'], LOCK_EX );
-			if( $file_saved===strlen($aResult['imgdata']) )
-			{
-				$aImageEmails[] = array('filename'=>basename($img_filename), 'subject'=>$aResult['subject'], 'body'=>$aResult['body']);
-			}
+			$aImageEmails[] = $aResult;
+
 			#break;
 		}
 		$this->pw_pop3->close();
@@ -109,28 +98,6 @@ class EmailImageAdaptor {
 		// The module would call this after getImages() or testConnection() to
 		// see if it should display/log any error messages.
         return (array)$this->pw_pop3->get_errors();
-	}
-
-
-	private function next_free_imgname( &$filename, $sanitize=true ) {
-		// sanitize img-basename
-		if( $sanitize===true )
-		{
-			$pi = pathinfo($filename);
-			$bn = preg_replace( '/[^a-z 0-9_@\.\-]/', '', strtolower($pi['filename']) );
-			$filename = ! is_string($bn) ? $filename : $pi['dirname'] .'/'. str_replace(' ', '_', $bn) .'.'. strtolower($pi['extension']);
-		}
-		if( ! file_exists($filename) )
-		{
-			return;
-		}
-		$pi = pathinfo($filename);
-		$n = 1;
-		while( file_exists($filename) )
-		{
-			// we use PHP Version > 5.2.0, so pathinfo['filename'] is present  (pathinfo['filename'] is basename without extension)
-			$filename = $pi['dirname'] .'/'. $pi['filename'] .'_'. strval($n++) .'.'. $pi['extension'];
-		}
 	}
 
 }
@@ -162,7 +129,7 @@ class hnpw_pop3
 	private $body_txt_start                 = '';                    /* */
 	private $body_txt_end                   = '';                    /* */
 
-	private $max_allowed_email_size         = 10485760;              /* 10 MB (1024 * 1024 * 10) */
+	private $max_allowed_email_size         = 31457280;              /* 30 MB (1024 * 1024 * 30) */
 
 	private $aValidVars                     = null;
 	private $pop3                           = null;
@@ -172,6 +139,7 @@ class hnpw_pop3
 	private $total_list                     = null;
 	private	$total_messages                 = null;
 	private	$total_size                     = null;
+	private $pulled_image_counter           = 1;                     /* starts with 1 */
 
 	private $errors                         = array();
 
@@ -287,7 +255,7 @@ class hnpw_pop3
 	}
 
 
-	public function process_next_msg()
+	public function process_next_msg($path)
 	{
 		if( ! $this->new_msg )
 		{
@@ -303,8 +271,8 @@ class hnpw_pop3
 			return false;
         }
 
-        $res = $this->get_message( $next[1] );
-		if( ! is_array($res) )
+        $res = $this->get_message( $next[1], $path );
+		if( ! is_array($res) || ! is_array($res['filenames']) )
 		{
 			# error is already set in method get_message()
         	$this->errors[] = $this->pop3->DeleteMessage( $next[1] );
@@ -325,12 +293,8 @@ class hnpw_pop3
 
 
 
-	private function get_message( $msg_id )
+	private function get_message( $msg_id, $path )
 	{
-//		$message_file = 'pop3://'.UrlEncode($this->user).':'.UrlEncode($this->password).'@'.$this->hostname.':'.$this->port.'/'.$msg_id.
-//			'?debug='.$this->debug.'&html_debug='.$this->html_debug.'&realm='.UrlEncode($this->realm).'&workstation='.UrlEncode($this->workstation).
-//			'&apop='.$this->apop.'&authentication_mechanism='.UrlEncode($this->authentication_mechanism).'&tls='.$this->tls;
-
 		$body = null;
 		$headers = null;
 		if( ( $error = $this->pop3->RetrieveMessage( $msg_id, $headers, $body, -1 ) ) != "" )
@@ -343,7 +307,6 @@ class hnpw_pop3
 
 		$mime = new mime_parser_class;
 		$mime->decode_bodies = 1;
-//		$parameters = array( 'File'=>$message_file, 'SkipBody'=>0 );
 		$parameters = array( 'Data'=>$message_file, 'SkipBody'=>0 );
 		if( ! $mime->Decode( $parameters, $decoded ) )
 		{
@@ -414,8 +377,8 @@ class hnpw_pop3
 		{
 			foreach( array_merge($plain,$html) as $k=>$v )
 			{
-				$tag1 = str_replace( array('/', '[', ']', '{', '}', '(', ')', '.', '?'), array('\\/', '\\[', '\\]', '\\{', '\\}', '\\(', '\\)', '\\.', '\\?'), trim($this->body_txt_start) );
-				$tag2 = str_replace( array('/', '[', ']', '{', '}', '(', ')', '.', '?'), array('\\/', '\\[', '\\]', '\\{', '\\}', '\\(', '\\)', '\\.', '\\?'), trim($this->body_txt_end) );
+				$tag1 = str_replace( array('/', '[', ']', '{', '}', '(', ')', '.', '?', '*', '+'), array('\\/', '\\[', '\\]', '\\{', '\\}', '\\(', '\\)', '\\.', '\\?', '\\*', '\\+'), trim($this->body_txt_start) );
+				$tag2 = str_replace( array('/', '[', ']', '{', '}', '(', ')', '.', '?', '*', '+'), array('\\/', '\\[', '\\]', '\\{', '\\}', '\\(', '\\)', '\\.', '\\?', '\\*', '\\+'), trim($this->body_txt_end) );
 				if( preg_match( '/.*?'.$tag1.'(.*?)'.$tag2.'.*/ms', $v['Body'], $matches )===1 )
 				{
 					$BodyText = $matches[1];
@@ -430,31 +393,39 @@ class hnpw_pop3
 			$this->errors[] = 'Email processing rejected! No image found in Email: ' . $subject;
 			return false;
 		}
-		// check for biggest image if there are multiple
+		// safe all imgdata to filesystem
 		$n = 0;
-		$part = array();
-		$BodyPartId = null;
+		$filenames = array();
 		foreach( $image as $img )
 		{
-			if( $n < $img['size'] )
-			{
-				$n = $img['size'];
-				$BodyPartId = $img['BodyPartId'];
-				$part['imgname'] = $img['imgname'];
-				$part['imgextension'] = $img['imgextension'];
-			}
-		}
-		$p = explode('-',$BodyPartId);
-		if( count($p)==2 )
-		{
-			$part['Body'] = $decoded['0']['Parts'][$p[0]]['Parts'][$p[1]]['Body'];
-		}
-		else
-		{
-			$part['Body'] = $decoded['0']['Parts'][$p[0]]['Body'];
-		}
+//			$img['size'];
+//			$img['BodyPartId'];
+//			$img['imgname'];
+//			$img['imgextension'];
 
-		return array( 'subject'=>$subject, 'body'=>$BodyText, 'imgdata'=>$part['Body'], 'imgname'=>$part['imgname'], 'imgextension'=>$part['imgextension'] );
+			$p = explode('-',$img['BodyPartId']);
+			if( count($p)==2 )
+			{
+				$imgdata =& $decoded['0']['Parts'][$p[0]]['Parts'][$p[1]]['Body'];
+			}
+			else
+			{
+				$imgdata =& $decoded['0']['Parts'][$p[0]]['Body'];
+			}
+
+			$img_basename = is_string($img['imgname']) ? $img['imgname'] : 'imgfile_'. strval($this->pulled_image_counter++) .'.'. $img['imgextension'];
+			$img_filename = $path .'/'. $img_basename;
+			$this->next_free_imgname($img_filename);
+			$file_saved = file_put_contents( $img_filename, $imgdata, LOCK_EX );
+			if( $file_saved===strlen($imgdata) )
+			{
+				$filenames[] = basename($img_filename);
+			}
+			$imgdata = null;
+		}
+		$filenames = is_array($filenames) && count($filenames)>0 ? $filenames : null;
+
+		return array('filenames'=>$filenames, 'subject'=>$subject, 'body'=>$BodyText);
 	}
 
 
@@ -520,6 +491,29 @@ class hnpw_pop3
 		}
 
 		${$type}[] = $aData;
+	}
+
+
+	private function next_free_imgname( &$filename, $sanitize=true )
+	{
+		// sanitize img-basename
+		if( $sanitize===true )
+		{
+			$pi = pathinfo($filename);
+			$bn = preg_replace( '/[^a-z 0-9_@\.\-]/', '', strtolower($pi['filename']) );
+			$filename = ! is_string($bn) ? $filename : $pi['dirname'] .'/'. str_replace(' ', '_', $bn) .'.'. strtolower($pi['extension']);
+		}
+		if( ! file_exists($filename) )
+		{
+			return;
+		}
+		$pi = pathinfo($filename);
+		$n = 1;
+		while( file_exists($filename) )
+		{
+			// we use PHP Version > 5.2.0, so pathinfo['filename'] is present  (pathinfo['filename'] is basename without extension)
+			$filename = $pi['dirname'] .'/'. $pi['filename'] .'_'. strval($n++) .'.'. $pi['extension'];
+		}
 	}
 
 

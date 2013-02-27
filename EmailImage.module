@@ -24,7 +24,7 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 
 		return array(
 			'title' => 'Email Image', 
-			'version' => 2, 
+			'version' => 100, 
 			'summary' => 'Send photos from your mobile phone to ProcessWire, from anywhere, on-the-fly.',
 			'author' => 'Horst Nogajski and Ryan Cramer',	
 			'singular' => true, 
@@ -183,6 +183,7 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 		$page->parent = $parent; 
 		$page->title = wire('sanitizer')->text($title); 
 
+		// find a unique name for new page
 		$n = 0;
 		do {
 			$page->name = ($n ? "$n-" : '') . wire('sanitizer')->pageName($title, true);
@@ -190,22 +191,49 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 			$n++;
 		} while($test->id); 
 
+		// save page to establish an ID (pages must have ID before files can be added)
 		try {
 			$page->save();
-			$field = wire('fields')->get($this->images_field_id); 
-			foreach($filenames as $filename) {
-				$page->get($field->name)->add($filename); 
-			}
-			if(strlen($body)) {
-				$page->email_image_body = wire('sanitizer')->textarea($body); 
-			}
-			$page->save();
-
-		} catch(WireException $e) {
-			$this->logError($e->getMessage()); 
+			$this->logActivity("Added page $page->id: $page->path"); 
+		} catch(Exception $e) {
+			$this->logError("Failed adding page: " . $e->getMessage());
+			return false;
 		}
+
+		$field = wire('fields')->get($this->images_field_id); 
+		$pagefiles = $field ? $page->get($field->name) : null;
+
+		if($pagefiles) {
+			// add each file
+			foreach($filenames as $filename) {
+				$this->addFile($pagefiles, $filename);
+			}
+
+		} else {
+			$this->logError("Can't find email_images field"); 
+		}
+
+		// add body text, if present
+		if(strlen($body)) $page->email_image_body = wire('sanitizer')->textarea($body); 
+
+		$page->save();
 			
 		return $page; 
+	}
+
+	/**
+	 * Add a file to a Pagefiles field
+	 *
+	 */
+	protected function addFile(Pagefiles $pagefiles, $filename) {
+		try {
+			$pagefiles->add($filename); 
+			$file = $pagefiles->last();
+			$this->logActivity("Added file: $file->url"); 
+		} catch(Exception $e) {
+			$error = basename($filename) . " - " . $e->getMessage();
+			$this->logError("Can't add file: $error"); 
+		}
 	}
 
 	/**
@@ -225,15 +253,12 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 		$a = $this->getAdaptor();
 
 		foreach(array_reverse($a->getImages(rtrim($path, '/'))) as $info) {
-			$filenames = $info['filename'];
-			// ensure it is an array of files
-			if(!is_array($filenames)) $filenames = array($filenames); 
+			$filenames = array();
 			// insert path into filenames
-			foreach($filenames as $k => $v) $filenames[$k] = $path . $v; 
+			foreach($info['filenames'] as $file) $filenames[] = $path . $file; 
+			if(!count($filenames)) return;
 			// add the page
 			$page = $this->addPage($info['subject'], $filenames, $info['body']); 	
-			// log the activity
-			if($page->id) $this->logActivity("Added page: $page->path"); 
 			// remove the temporary files
 			foreach($filenames as $filename) @unlink($filename); 
 		}

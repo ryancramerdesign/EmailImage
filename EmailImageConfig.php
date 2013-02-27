@@ -139,6 +139,8 @@ class EmailImageConfig extends Wire {
 		if($success) {
 			$note = $this->_('SUCCESS! Email settings appear to work correctly.');
 			$this->message($note); 
+			$url = wire('pages')->get("template=email-images")->url; 
+			$this->message("Go ahead and email yourself an image or two, wait a minute (or two), and then view <a href='$url'>this page</a>."); 
 
 		} else {
 			$note = $this->_('ERROR: email settings did not work.'); 	
