@@ -24,7 +24,7 @@ class EmailImage extends WireData implements Module, ConfigurableModule {
 
 		return array(
 			'title' => 'Email Image', 
-			'version' => 100, 
+			'version' => 101, 
 			'summary' => 'Send photos from your mobile phone to ProcessWire, from anywhere, on-the-fly.',
 			'author' => 'Horst Nogajski and Ryan Cramer',	
 			'singular' => true, 

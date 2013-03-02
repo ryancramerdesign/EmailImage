@@ -4,13 +4,13 @@
   *
   *  @php_version -   5.2.x
   * ---------------------------------------------------------------------------
-  *  @version     -   v1.0 RC2
-  *  @date        -   $Date: 2013/02/26 22:18:01 $
+  *  @version     -   v1.0
+  *  @date        -   $Date: 2013/02/28 20:20:49 $
   *  @author      -   Horst Nogajski <coding AT nogajski DOT de>
   *  @licence     -   GNU GPL v2 - http://www.gnu.org/licenses/gpl-2.0.html
   * ---------------------------------------------------------------------------
   *  $Source: /WEB/pw_pop3/EmailImageAdaptor.php,v $
-  *  $Id: EmailImageAdaptor.php,v 1.1.2.4 2013/02/26 22:18:01 horst Exp $
+  *  $Id: EmailImageAdaptor.php,v 1.1.2.6 2013/02/28 20:20:49 horst Exp $
   ******************************************************************************
   *
   *  LAST CHANGES:
@@ -21,6 +21,8 @@
   *  2013-02-26    change  	RC2   now we pull all images from Email, function getImages($path) now returns filename/s as array:
   *                               - array('filenames' => array('file1.jpg','file2.jpg','file3.jpg'), 'subject' => 'another subject line', 'body' => 'optional some descriptive Text')
   *                               - array('filenames' => array('file.jpg'), 'subject' => 'a subject line', 'body' => '')
+  *
+  *  2013-02-28    change  	1.0   now use strpos and substr to search for BodyText and BodyPassword (instead of preg_match)
   *
 **/
 
@@ -77,18 +79,16 @@ class EmailImageAdaptor {
 		$aImageEmails = array();
 		while( $this->pw_pop3->has_new_msg() )
 		{
-			@set_time_limit( 120 );
-
+			@set_time_limit(120);
 			$aResult = $this->pw_pop3->process_next_msg($path);
 			if( ! is_array($aResult) )
 			{
 				continue;
 			}
 			$aImageEmails[] = $aResult;
-
-			#break;
 		}
 		$this->pw_pop3->close();
+
 		return $aImageEmails;
 	}
 
@@ -305,7 +305,7 @@ class hnpw_pop3
 
         $message_file = implode("\r\n",$headers) ."\r\n". implode("\r\n",$body);  // ???
 
-		$mime = new mime_parser_class;
+		$mime = new mime_parser_class();
 		$mime->decode_bodies = 1;
 		$parameters = array( 'Data'=>$message_file, 'SkipBody'=>0 );
 		if( ! $mime->Decode( $parameters, $decoded ) )
@@ -358,7 +358,7 @@ class hnpw_pop3
 			# check for extra security password
 			foreach( array_merge($plain,$html) as $k=>$v )
 			{
-				if( preg_match( '/.*?('. str_replace('/','\\/',trim($this->body_password)) .').*/', $v['Body'] )===1 )
+				if( false !== strpos($v['Body'], trim($this->body_password)) )
 				{
 					$pass = true;
 					break;
@@ -377,12 +377,14 @@ class hnpw_pop3
 		{
 			foreach( array_merge($plain,$html) as $k=>$v )
 			{
-				$tag1 = str_replace( array('/', '[', ']', '{', '}', '(', ')', '.', '?', '*', '+'), array('\\/', '\\[', '\\]', '\\{', '\\}', '\\(', '\\)', '\\.', '\\?', '\\*', '\\+'), trim($this->body_txt_start) );
-				$tag2 = str_replace( array('/', '[', ']', '{', '}', '(', ')', '.', '?', '*', '+'), array('\\/', '\\[', '\\]', '\\{', '\\}', '\\(', '\\)', '\\.', '\\?', '\\*', '\\+'), trim($this->body_txt_end) );
-				if( preg_match( '/.*?'.$tag1.'(.*?)'.$tag2.'.*/ms', $v['Body'], $matches )===1 )
+				if( false !== ($pos1 = strpos($v['Body'], trim($this->body_txt_start))) )
 				{
-					$BodyText = $matches[1];
-					break;
+					$pos1 += strlen(trim($this->body_txt_start));
+					if( false !== ($pos2 = strpos($v['Body'], trim($this->body_txt_end), $pos1)) )
+					{
+						$BodyText = substr($v['Body'], $pos1, ($pos2-$pos1));
+						break;
+					}
 				}
 			}
 		}
