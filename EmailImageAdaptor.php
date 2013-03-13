@@ -1,16 +1,23 @@
 <?php
 /*******************************************************************************
   *  PHP-CLASSES
+  *                               includes imagemanipulation-class to autorotate
+  *                               e.g. iPhone images
+  *
+  *                               to enable autoRotation extend the $config-Array
+  *                               with var: $autorotate_pattern
+  *
+  *                               e.g.: 'autorotate_pattern' => '/^iPhone.*$/i'
   *
   *  @php_version -   5.2.x
   * ---------------------------------------------------------------------------
-  *  @version     -   v1.0
-  *  @date        -   $Date: 2013/02/28 20:20:49 $
+  *  @version     -   v1.1
+  *  @date        -   $Date: 2013/03/07 23:52:24 $
   *  @author      -   Horst Nogajski <coding AT nogajski DOT de>
   *  @licence     -   GNU GPL v2 - http://www.gnu.org/licenses/gpl-2.0.html
   * ---------------------------------------------------------------------------
   *  $Source: /WEB/pw_pop3/EmailImageAdaptor.php,v $
-  *  $Id: EmailImageAdaptor.php,v 1.1.2.6 2013/02/28 20:20:49 horst Exp $
+  *  $Id: EmailImageAdaptor.php,v 1.1.2.9 2013/03/07 23:52:24 horst Exp $
   ******************************************************************************
   *
   *  LAST CHANGES:
@@ -23,6 +30,8 @@
   *                               - array('filenames' => array('file.jpg'), 'subject' => 'a subject line', 'body' => '')
   *
   *  2013-02-28    change  	1.0   now use strpos and substr to search for BodyText and BodyPassword (instead of preg_match)
+  *
+  *  2013-03-06    new      1.1   added a class to autoRotate iPhone-Images !!!  ;-)
   *
 **/
 
@@ -108,6 +117,10 @@ class EmailImageAdaptor {
 
 class hnpw_pop3
 {
+    private $autorotate_pattern             = null;                  /* a RegEx-Pattern that will compared against
+                                                                        the Make-Model-Exiftag, if matches, image
+                                                                        gets rotated automatically                  */
+
 	private $debug                          = 0;                     /* Output debug information                    */
 	private $html_debug                     = 0;                     /* Debug information is in HTML                */
 
@@ -427,6 +440,28 @@ class hnpw_pop3
 		}
 		$filenames = is_array($filenames) && count($filenames)>0 ? $filenames : null;
 
+
+
+
+// >>>>>>>
+       		if( is_string($this->autorotate_pattern) && ! is_null($filenames) && function_exists('exif_read_data') )
+			{
+				foreach($filenames as $fn)
+				{
+					$fn = $path .'/'. $fn;
+					$exif = @exif_read_data( $fn, 'IFD0');
+					if( ! is_array($exif) || ! isset($exif['Model']) || preg_match($this->autorotate_pattern,$exif['Model'])!==1 )
+					{
+						continue;
+					}
+			        hn_ImageManipulation::jpegfile_auto_correction($fn);
+				}
+			}
+// <<<<<<<
+
+
+
+
 		return array('filenames'=>$filenames, 'subject'=>$subject, 'body'=>$BodyText);
 	}
 
@@ -570,7 +605,7 @@ class hnpw_pop3
 				break;
 
 			default:
-				if( in_array($k,array('hostname','user','password','workstation','realm','body_password','body_txt_start','body_txt_end')) )
+				if( in_array($k,array('hostname','user','password','workstation','realm','body_password','body_txt_start','body_txt_end'      ,  'autorotate_pattern'   )) )
 				{
 					$this->$k = strval($v);
 				}
@@ -625,5 +660,157 @@ class hnpw_pop3
 
 
 
+
+
+
+
+
+
+
+class hn_ImageManipulation
+{
+	private $im_dst     = null;   // is the output for every intermediate method and the check-out!
+	private $im_tmp     = null;   // optional intermediate image object
+	private $im_flip    = null;   // optional intermediate image object
+	private $im_rotate  = null;   // optional intermediate image object
+	private $im_resize  = null;   // optional intermediate image object
+	private $im_color   = null;   // optional intermediate image object
+
+
+	// currently assumes a JPEG-image !!
+    public static function jpegfile_auto_correction( $filename, $quality=95 )
+    {
+		if( ! is_file($filename) || ! is_writable($filename) )
+			return false;
+		$cor = hn_ImageManipulation::file_get_exif_orientation($filename,true);
+		if( ! is_array($cor) )
+			return false;
+		if( $cor[0]===0 && $cor[1]===0 )
+			return true;
+		// correction is needed
+		$img = @imagecreatefromstring(file_get_contents($filename));
+		if( ! hn_ImageManipulation::is_resource_gd($img) )
+			return false;
+		$man = new hn_ImageManipulation($img);
+		if( $cor[0]!==0 && ! $man->img_rotate($cor[0]) ) {
+			@imagedestroy($img);
+			unset($man);
+			return false;
+		}
+		if( $cor[1]!==0 && ! $man->img_flip(($cor[1]===2 ? true : false)) ) {
+			@imagedestroy($img);
+			unset($man);
+			return false;
+		}
+		$img = $man->img_get_result();
+		$quality = is_int($quality) && $quality>0 && $quality<=100 ? $quality : 95;
+		$res = @imagejpeg( $img, $filename, $quality );
+		@imagedestroy($img);
+		unset($man);
+		return $res;
+    }
+
+
+
+
+
+
+	public function __construct( &$im_src )
+	{
+		if( ! $this->is_resource_gd($im_src) ) return;
+		$this->im_dst = $im_src;
+	}
+
+
+    public function img_flip( $vertical=false )
+    {
+		$sx  = imagesx($this->im_dst);
+		$sy  = imagesy($this->im_dst);
+		$this->im_tmp = @imagecreatetruecolor($sx, $sy);
+		if( $vertical===true )
+		{
+			$this->im_flip = @imagecopyresampled($this->im_tmp, $this->im_dst, 0, 0, 0, ($sy-1), $sx, $sy, $sx, 0-$sy);
+		}
+		else
+		{
+			$this->im_flip = @imagecopyresampled($this->im_tmp, $this->im_dst, 0, 0, ($sx-1), 0, $sx, $sy, 0-$sx, $sy);
+		}
+		if( ! $this->is_resource_gd($this->im_flip) )
+			return false;
+    	$this->im_dst = $this->im_flip;
+    	@imagedestroy($this->im_tmp);
+    	return true;
+    }
+
+
+    public function img_rotate( $degree, $background_color=0 )
+    {
+    	$background_color = is_int($background_color) && $background_color>=0 && $background_color<=255 ? $background_color : 0;
+    	$degree = (is_float($degree) || is_int($degree)) && $degree > -361 && $degree < 361 ? $degree : false;
+    	if($degree===false)
+    		return false;
+    	if( in_array($degree, array(-360,0,360)) )
+    		return true;
+    	$this->im_rotate = @imagerotate( $this->im_dst, $degree, $background_color );
+    	if( ! $this->is_resource_gd($this->im_rotate) )
+    		return false;
+    	$this->im_dst = $this->im_rotate;
+    	return true;
+    }
+
+
+    public function img_get_result()
+    {
+		return $this->im_dst;
+    }
+
+
+
+
+
+
+    public static function file_get_exif_orientation( $filename, $return_correctionArray=false )
+    {
+		// first value is rotation-degree and second value is flip-mode: 0=NONE | 1=HORIZONTAL | 2=VERTICAL
+		$corrections = array(
+			'1' => array(  0, 0),
+			'2' => array(  0, 1),
+			'3' => array(180, 0),
+			'4' => array(  0, 2),
+			'5' => array(270, 1),
+			'6' => array(270, 0),
+			'7' => array( 90, 1),
+			'8' => array( 90, 0)
+		);
+		if( ! function_exists('exif_read_data') )
+			return false;
+		$exif = @exif_read_data($filename, 'IFD0');
+		if( ! is_array($exif) || ! isset($exif['Orientation']) || ! in_array(strval($exif['Orientation']), array_keys($corrections)) )
+			return false;
+		if( $return_correctionArray !== true )
+			return intval($exif['Orientation']);
+		return $corrections[strval($exif['Orientation'])];
+    }
+
+
+
+
+	public function __destruct()
+	{
+//		if( $this->is_resource_gd($this->im_dst) )     @imagedestroy($this->im_dst);
+		if( $this->is_resource_gd($this->im_tmp) )     @imagedestroy($this->im_tmp);
+		if( $this->is_resource_gd($this->im_flip) )    @imagedestroy($this->im_flip);
+		if( $this->is_resource_gd($this->im_rotate) )  @imagedestroy($this->im_rotate);
+		if( $this->is_resource_gd($this->im_resize) )  @imagedestroy($this->im_resize);
+		if( $this->is_resource_gd($this->im_color) )   @imagedestroy($this->im_color);
+	}
+
+
+	public static function is_resource_gd( &$var )
+	{
+		return is_resource($var) && strtoupper(substr(get_resource_type($var),0,2))=='GD' ? true : false;
+	}
+
+}
 
 
